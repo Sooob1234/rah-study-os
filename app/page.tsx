@@ -1,501 +1,167 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 
-type JsonRecord = Record<string, unknown>;
+type R = Record<string, unknown>;
 
-type StudyPart = {
-  id?: string;
-  title: string;
-  subtitle?: string;
-  plannedMinutes?: number;
-  actualMinutes?: number;
-  plannedTests?: number;
-  completedTests?: number;
-  status?: string;
-};
-
-function asRecord(value: unknown): JsonRecord {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as JsonRecord)
-    : {};
+function rec(v: unknown): R {
+  return v && typeof v === "object" && !Array.isArray(v) ? (v as R) : {};
 }
-
-function firstRecord(value: unknown): JsonRecord {
-  if (Array.isArray(value)) return asRecord(value[0]);
-  return asRecord(value);
+function n(v: unknown, fallback = 0) {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && v.trim() && Number.isFinite(Number(v))) return Number(v);
+  return fallback;
 }
-
-function num(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) {
-    return Number(value);
-  }
-  return undefined;
+function s(v: unknown, fallback = "") {
+  return typeof v === "string" && v.trim() ? v : fallback;
 }
-
-function str(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
+function pct(a: number, b: number) {
+  return b ? Math.min(100, Math.round((a / b) * 100)) : 0;
 }
-
-function getList(source: JsonRecord, keys: string[]): unknown[] {
-  for (const key of keys) {
-    if (Array.isArray(source[key])) return source[key] as unknown[];
-  }
-  return [];
-}
-
-function normalizePart(value: unknown): StudyPart {
-  const item = asRecord(value);
-  const progress = asRecord(item.progress);
-  const title =
-    str(item.title) ??
-    str(item.name) ??
-    str(item.subject_name) ??
-    str(item.label) ??
-    "بخش مطالعه";
-
-  const topic =
-    str(item.topic_name) ??
-    str(item.topic) ??
-    str(item.subtitle) ??
-    str(item.description);
-
-  return {
-    id: str(item.id) ?? str(item.study_part_id),
-    title,
-    subtitle: topic,
-    plannedMinutes:
-      num(item.planned_minutes) ??
-      num(item.plannedMinutes) ??
-      num(item.target_minutes),
-    actualMinutes:
-      num(item.actual_minutes) ??
-      num(item.actualMinutes) ??
-      num(item.spent_minutes),
-    plannedTests:
-      num(item.planned_tests) ??
-      num(item.plannedTests) ??
-      num(item.target_count) ??
-      num(item.total_tests),
-    completedTests:
-      num(item.completed_tests) ??
-      num(item.completedTests) ??
-      num(item.done_count) ??
-      num(progress.completed) ??
-      num(progress.done),
-    status: str(item.status),
-  };
-}
-
-function formatMinutes(value?: number) {
-  if (!value) return "۰ دقیقه";
-  if (value < 60) return `${value.toLocaleString("fa-IR")} دقیقه`;
-  const hours = Math.floor(value / 60);
-  const minutes = value % 60;
-  return minutes
-    ? `${hours.toLocaleString("fa-IR")} ساعت و ${minutes.toLocaleString("fa-IR")} دقیقه`
-    : `${hours.toLocaleString("fa-IR")} ساعت`;
-}
-
-function statusLabel(status?: string) {
-  switch (status) {
-    case "COMPLETED":
-      return "انجام شده";
-    case "IN_PROGRESS":
-      return "در حال انجام";
-    case "PARTIAL":
-      return "نیمه‌تمام";
-    case "SKIPPED":
-      return "رد شده";
-    default:
-      return "برنامه‌ریزی شده";
-  }
-}
-
-function statusClass(status?: string) {
-  switch (status) {
-    case "COMPLETED":
-      return "is-complete";
-    case "IN_PROGRESS":
-      return "is-progress";
-    case "PARTIAL":
-      return "is-partial";
-    default:
-      return "";
-  }
-}
-
 function Icon({ name }: { name: string }) {
-  const common = {
-    width: 20,
-    height: 20,
-    viewBox: "0 0 24 24",
-    fill: "none",
-    stroke: "currentColor",
-    strokeWidth: 1.8,
-    strokeLinecap: "round" as const,
-    strokeLinejoin: "round" as const,
-    "aria-hidden": true,
-  };
-
-  if (name === "calendar") {
-    return (
-      <svg {...common}>
-        <path d="M6 2v4M18 2v4M3 9h18" />
-        <rect x="3" y="4" width="18" height="17" rx="3" />
-      </svg>
-    );
-  }
-  if (name === "library") {
-    return (
-      <svg {...common}>
-        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
-        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z" />
-      </svg>
-    );
-  }
-  if (name === "chart") {
-    return (
-      <svg {...common}>
-        <path d="M4 19V9M10 19V5M16 19v-7M22 19H2" />
-      </svg>
-    );
-  }
-  if (name === "target") {
-    return (
-      <svg {...common}>
-        <circle cx="12" cy="12" r="8" />
-        <circle cx="12" cy="12" r="3" />
-        <path d="M18 6l3-3M18 3h3v3" />
-      </svg>
-    );
-  }
-  if (name === "check") {
-    return (
-      <svg {...common}>
-        <path d="m5 12 4 4L19 6" />
-      </svg>
-    );
-  }
-  if (name === "plus") {
-    return (
-      <svg {...common}>
-        <path d="M12 5v14M5 12h14" />
-      </svg>
-    );
-  }
-  if (name === "flame") {
-    return (
-      <svg {...common}>
-        <path d="M12 22c4 0 7-2.8 7-6.7 0-2.8-1.6-5.1-4.1-7.4.1 2-1 3.2-2 3.8.2-4-2.1-7.2-5.5-9.7.4 3.4-2.4 6.4-2.4 10.6C5 18 8 22 12 22Z" />
-      </svg>
-    );
-  }
-  return (
-    <svg {...common}>
-      <circle cx="12" cy="12" r="9" />
-      <path d="M12 8v4l2.5 1.5" />
-    </svg>
-  );
+  const p = { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
+  if (name === "sun") return <svg {...p}><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.5 1.5M17.6 17.6l1.5 1.5M2 12h2M20 12h2M4.9 19.1l1.5-1.5M17.6 6.4l1.5-1.5"/></svg>;
+  if (name === "calendar") return <svg {...p}><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></svg>;
+  if (name === "bookmark") return <svg {...p}><path d="M6 3h12v18l-6-4-6 4V3Z"/></svg>;
+  if (name === "book") return <svg {...p}><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/></svg>;
+  if (name === "chart") return <svg {...p}><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg>;
+  if (name === "exam") return <svg {...p}><path d="m2 10 10-5 10 5-10 5L2 10Z"/><path d="M6 12v5c3 2 9 2 12 0v-5"/></svg>;
+  if (name === "compass") return <svg {...p}><circle cx="12" cy="12" r="9"/><path d="m15 9-2 4-4 2 2-4 4-2Z"/></svg>;
+  if (name === "plus") return <svg {...p}><path d="M12 5v14M5 12h14"/></svg>;
+  if (name === "list") return <svg {...p}><path d="M9 6h11M9 12h11M9 18h11"/><path d="m4 6 1 1 2-2M4 12h3M4 18h3"/></svg>;
+  if (name === "clock") return <svg {...p}><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>;
+  if (name === "gauge") return <svg {...p}><path d="M4.9 19.1a10 10 0 1 1 14.2 0"/><path d="m12 12 4-4"/><path d="M7 17h10"/></svg>;
+  if (name === "brain") return <svg {...p}><path d="M9.5 4.5A3 3 0 0 0 4 6v1a3 3 0 0 0 0 5 3 3 0 0 0 2 5.8V19a3 3 0 0 0 5 2.2V4.8a3 3 0 0 0-1.5-.3ZM14.5 4.5A3 3 0 0 1 20 6v1a3 3 0 0 1 0 5 3 3 0 0 1-2 5.8V19a3 3 0 0 1-5 2.2V4.8a3 3 0 0 1 1.5-.3Z"/></svg>;
+  return <svg {...p}><circle cx="12" cy="12" r="8"/></svg>;
 }
 
 export default async function Home() {
   const supabase = await createClient();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
+  const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
   const [{ data: profile }, { data: today, error }] = await Promise.all([
-    supabase
-      .from("profiles")
-      .select("display_name")
-      .eq("user_id", user.id)
-      .single(),
+    supabase.from("profiles").select("display_name").eq("user_id", user.id).single(),
     supabase.rpc("get_today_dashboard"),
   ]);
 
-  const payload = firstRecord(today);
-  const rawParts = getList(payload, ["study_parts", "parts", "plan", "today_parts"]);
-  const parts = rawParts.map(normalizePart);
+  const data = rec(today);
+  const kpis = rec(data.kpis);
+  const reviews = rec(data.reviews);
+  const exam = rec(data.next_exam);
+  const parts = Array.isArray(data.parts) ? data.parts.map(rec) : [];
 
-  const plannedMinutes =
-    num(payload.planned_minutes) ??
-    num(payload.total_planned_minutes) ??
-    parts.reduce((sum, part) => sum + (part.plannedMinutes ?? 0), 0);
+  const partCount = n(kpis.part_count, parts.length);
+  const plannedTests = n(kpis.planned_tests);
+  const completedTests = n(kpis.completed_tests);
+  const plannedMinutes = n(kpis.planned_minutes);
+  const actualMinutes = n(kpis.actual_minutes);
+  const avgExecution = n(kpis.avg_execution);
+  const streak = n(data.streak);
+  const dueReviews = n(reviews.due_count);
+  const overdueReviews = n(reviews.overdue_count);
+  const completedParts = parts.filter((x) => s(x.status) === "COMPLETED").length;
+  const testProgress = pct(completedTests, plannedTests);
+  const partProgress = pct(completedParts, partCount);
+  const timeProgress = pct(actualMinutes, plannedMinutes);
+  const score = Math.round(avgExecution || testProgress * .45 + partProgress * .35 + timeProgress * .2);
 
-  const actualMinutes =
-    num(payload.actual_minutes) ??
-    num(payload.total_actual_minutes) ??
-    parts.reduce((sum, part) => sum + (part.actualMinutes ?? 0), 0);
-
-  const plannedTests =
-    num(payload.planned_tests) ??
-    num(payload.total_planned_tests) ??
-    parts.reduce((sum, part) => sum + (part.plannedTests ?? 0), 0);
-
-  const completedTests =
-    num(payload.completed_tests) ??
-    num(payload.total_completed_tests) ??
-    parts.reduce((sum, part) => sum + (part.completedTests ?? 0), 0);
-
-  const dueReviews =
-    num(payload.due_reviews) ??
-    num(payload.review_count) ??
-    num(payload.reviews_due) ??
-    0;
-
-  const streak =
-    num(payload.streak) ??
-    num(payload.current_streak) ??
-    num(payload.study_streak) ??
-    0;
-
-  const completedParts = parts.filter((part) => part.status === "COMPLETED").length;
-  const planProgress = parts.length ? Math.round((completedParts / parts.length) * 100) : 0;
-
-  const persianToday = new Intl.DateTimeFormat("fa-IR", {
-    timeZone: "Asia/Tehran",
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  }).format(new Date());
-
-  const displayName = profile?.display_name || "سبحان";
+  const dateText = new Intl.DateTimeFormat("fa-IR", { timeZone: "Asia/Tehran", weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(new Date());
+  const examTitle = s(exam.title, "آزمونی ثبت نشده");
+  const examDate = s(exam.exam_date);
+  const examTime = s(exam.start_time);
+  const days = n(exam.days_remaining);
 
   return (
-    <div className="rah-app" dir="rtl">
+    <div className="app" dir="rtl">
       <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark">ر</div>
-          <div>
-            <strong>رَه</strong>
-            <span>Study OS</span>
-          </div>
-        </div>
-
-        <nav className="side-nav" aria-label="ناوبری اصلی">
-          <a className="nav-item active" href="/">
-            <Icon name="check" />
-            <span>امروز</span>
-          </a>
-          <button className="nav-item" type="button" disabled title="در نسخه بعد">
-            <Icon name="calendar" />
-            <span>برنامه‌ریز</span>
-          </button>
-          <button className="nav-item" type="button" disabled title="در نسخه بعد">
-            <Icon name="library" />
-            <span>کتابخانه تست</span>
-          </button>
-          <button className="nav-item" type="button" disabled title="در نسخه بعد">
-            <Icon name="chart" />
-            <span>بینش‌ها</span>
-          </button>
-          <button className="nav-item" type="button" disabled title="در نسخه بعد">
-            <Icon name="target" />
-            <span>ماموریت</span>
-          </button>
+        <div className="brand"><div className="brandMark">ر</div><div><strong>رَه</strong><small>Study OS</small></div></div>
+        <div className="navSectionLabel">فضای کار</div>
+        <nav className="nav">
+          <a className="active" href="/"><span className="iconWrap"><Icon name="sun"/></span>امروز</a>
+          <button><span className="iconWrap"><Icon name="calendar"/></span>برنامه‌ریز</button>
+          <button><span className="iconWrap"><Icon name="bookmark"/></span>مرورها</button>
+          <button><span className="iconWrap"><Icon name="book"/></span>کتابخانه تست</button>
+          <button><span className="iconWrap"><Icon name="chart"/></span>گزارش‌ها</button>
+          <button><span className="iconWrap"><Icon name="exam"/></span>آزمون‌ها</button>
         </nav>
-
-        <div className="sidebar-goal">
-          <span className="eyebrow">هدف اصلی</span>
-          <strong>MBA مالی شریف</strong>
-          <small>رتبه هدف: زیر ۴۰</small>
-          <div className="goal-line">
-            <span style={{ width: "36%" }} />
-          </div>
-        </div>
+        <div className="navSectionLabel">مسیر</div>
+        <nav className="nav"><button><span className="iconWrap"><Icon name="compass"/></span>Mission Control</button></nav>
+        <div className="sideFooter"><div className="sideFooterCard"><b>{examTitle}</b><small>{examDate ? Math.max(days,0).toLocaleString("fa-IR") + " روز مانده" : "هنوز آزمون آینده ثبت نشده"}</small><div className="sideFooterBar"><i style={{width: Math.min(100, Math.max(0, avgExecution)) + "%"}}/></div></div></div>
       </aside>
 
-      <main className="main-shell">
-        <header className="topbar">
-          <div>
-            <p className="date-line">{persianToday}</p>
-            <h1>سلام {displayName}، برنامه امروزت اینجاست.</h1>
+      <main className="main">
+        <section className="page">
+          <div className="header">
+            <div><div className="eyebrow">{dateText}</div><h1>برنامه امروز</h1><p>امروز اول برنامه را مرور می‌کنی، بعد از همان‌جا وارد اجرا می‌شوی. ثبت اطلاعات باید سریع، تمیز و بی‌اصطکاک باشد.</p></div>
+            <div className="actions"><span className="pill desktopOnly">🔥 {streak.toLocaleString("fa-IR")} روز متوالی</span><button className="btn primary"><Icon name="plus"/>پارت جدید</button></div>
           </div>
-          <div className="top-actions">
-            <div className="streak-chip">
-              <Icon name="flame" />
-              <span>{streak.toLocaleString("fa-IR")} روز پیوسته</span>
-            </div>
-            <button className="profile-button" type="button" aria-label="حساب کاربری">
-              {displayName.slice(0, 1)}
-            </button>
-          </div>
-        </header>
 
-        {error ? (
-          <section className="error-card">
-            <strong>دریافت اطلاعات امروز کامل نشد.</strong>
-            <span>اتصال برقرار است، اما داشبورد امروز خطا برگرداند.</span>
-          </section>
-        ) : null}
+          {error ? <div className="errorBox">دریافت داده‌های امروز با خطا روبه‌رو شد.</div> : null}
 
-        <section className="hero-grid">
-          <div className="today-hero">
-            <div className="hero-copy">
-              <span className="eyebrow light">تمرکز امروز</span>
-              <h2>{parts.length ? `${parts.length.toLocaleString("fa-IR")} بخش مطالعه` : "یک روز تازه برای ساختن ریتم"}</h2>
-              <p>
-                {parts.length
-                  ? `${formatMinutes(plannedMinutes)} برنامه‌ریزی شده و ${plannedTests.toLocaleString("fa-IR")} تست در برنامه داری.`
-                  : "برنامه امروز هنوز خالی است. از برنامه‌ریز، اولین بخش مطالعه را برای امروز ثبت کن."}
-              </p>
-              <div className="hero-meta">
-                <span><Icon name="clock" /> {formatMinutes(actualMinutes)} انجام‌شده</span>
-                <span><Icon name="check" /> {completedTests.toLocaleString("fa-IR")} تست ثبت‌شده</span>
+          <div className="todayLayout">
+            <div className="stack">
+              <div className="examBanner">
+                <div className="top">
+                  <div><div className="label">آزمون بعدی</div><h2>{examTitle}</h2><div className="meta">{examDate ? examDate + (examTime ? " · ساعت " + examTime.slice(0,5) : "") : "از بخش آزمون‌ها، آزمون بعدی را ثبت کن."}</div></div>
+                  <div className="days"><b className="mono">{examDate ? Math.max(days,0).toLocaleString("fa-IR") : "—"}</b><span>روز مانده</span></div>
+                </div>
+                <div className="progressWrap"><div className="progressHead"><span>پیشرفت بودجه تا آزمون</span><span>{Math.round(avgExecution).toLocaleString("fa-IR")}٪</span></div><div className="track"><i style={{width: Math.min(100, Math.max(0, avgExecution)) + "%"}}/></div></div>
               </div>
-            </div>
-            <div className="score-ring" style={{ "--progress": `${planProgress * 3.6}deg` } as React.CSSProperties}>
-              <div>
-                <strong>{planProgress.toLocaleString("fa-IR")}٪</strong>
-                <span>اجرای برنامه</span>
+
+              <div className="kpiGrid">
+                <div className="card kpi"><div className="iconBox"><Icon name="list"/></div><b className="mono">{partCount.toLocaleString("fa-IR")}</b><small>پارت امروز</small></div>
+                <div className="card kpi"><div className="iconBox"><span className="dotIcon">●</span></div><b className="mono">{plannedTests.toLocaleString("fa-IR")}</b><small>تست هدف</small></div>
+                <div className="card kpi"><div className="iconBox"><Icon name="clock"/></div><b className="mono">{plannedMinutes.toLocaleString("fa-IR")}</b><small>دقیقه برنامه</small></div>
+                <div className="card kpi"><div className="iconBox"><Icon name="gauge"/></div><b className="mono">{Math.round(avgExecution).toLocaleString("fa-IR")}٪</b><small>تطابق هفته</small></div>
               </div>
-            </div>
-          </div>
 
-          <div className="next-exam-card">
-            <div className="exam-head">
-              <span className="eyebrow">آزمون بعدی</span>
-              <span className="dot-live" />
-            </div>
-            <strong>مرحله اول مدرسان شریف</strong>
-            <p>جمعه ۱۵ آبان · ساعت ۰۸:۳۰</p>
-            <div className="exam-countdown">
-              <div><strong>۴۹</strong><span>روز</span></div>
-              <div><strong>:</strong></div>
-              <div><strong>هدف</strong><span>اجرای کامل بودجه</span></div>
-            </div>
-          </div>
-        </section>
+              <div className="sectionTitle"><h2>پارت‌های امروز</h2><span>ترتیب مهم نیست · بعد از انجام Collapse می‌شوند</span></div>
 
-        <section className="kpi-grid" aria-label="شاخص‌های امروز">
-          <article className="kpi-card">
-            <span className="kpi-icon"><Icon name="clock" /></span>
-            <div><small>زمان مطالعه</small><strong>{formatMinutes(actualMinutes)}</strong></div>
-            <span className="kpi-sub">از {formatMinutes(plannedMinutes)}</span>
-          </article>
-          <article className="kpi-card">
-            <span className="kpi-icon"><Icon name="check" /></span>
-            <div><small>تست‌ها</small><strong>{completedTests.toLocaleString("fa-IR")}</strong></div>
-            <span className="kpi-sub">از {plannedTests.toLocaleString("fa-IR")} برنامه</span>
-          </article>
-          <article className="kpi-card">
-            <span className="kpi-icon"><Icon name="library" /></span>
-            <div><small>مرور سررسید</small><strong>{dueReviews.toLocaleString("fa-IR")}</strong></div>
-            <span className="kpi-sub">مورد برای مرور</span>
-          </article>
-          <article className="kpi-card">
-            <span className="kpi-icon"><Icon name="flame" /></span>
-            <div><small>روند پیوسته</small><strong>{streak.toLocaleString("fa-IR")}</strong></div>
-            <span className="kpi-sub">روز متوالی</span>
-          </article>
-        </section>
-
-        <div className="content-grid">
-          <section className="panel plan-panel">
-            <div className="panel-head">
-              <div>
-                <span className="eyebrow">برنامه روز</span>
-                <h2>بخش‌های مطالعه</h2>
-              </div>
-              <span className="count-badge">{parts.length.toLocaleString("fa-IR")} بخش</span>
-            </div>
-
-            <div className="parts-list">
-              {parts.length ? (
-                parts.map((part, index) => {
-                  const testsDone = part.completedTests ?? 0;
-                  const testsPlan = part.plannedTests ?? 0;
-                  const progress = testsPlan ? Math.min(100, Math.round((testsDone / testsPlan) * 100)) : 0;
-
+              <div className="sessionList">
+                {parts.length ? parts.map((part, index) => {
+                  const title = s(part.title, "بخش مطالعه");
+                  const status = s(part.status, "PLANNED");
+                  const done = status === "COMPLETED";
+                  const planned = n(part.planned_test_count);
+                  const complete = n(part.completed_test_count);
+                  const mins = n(part.planned_minutes);
+                  const actual = n(part.actual_minutes);
+                  const kind = title.includes("GMAT") ? "blue" : title.includes("زبان") ? "amber" : title.includes("مرور") ? "gray" : "";
                   return (
-                    <article className={`study-part ${statusClass(part.status)}`} key={part.id ?? `${part.title}-${index}`}>
-                      <div className="part-index">{(index + 1).toLocaleString("fa-IR")}</div>
-                      <div className="part-main">
-                        <div className="part-title-row">
-                          <div>
-                            <h3>{part.title}</h3>
-                            {part.subtitle ? <p>{part.subtitle}</p> : null}
-                          </div>
-                          <span className="status-pill">{statusLabel(part.status)}</span>
-                        </div>
-
-                        <div className="part-stats">
-                          {part.plannedMinutes !== undefined ? (
-                            <span><Icon name="clock" /> {formatMinutes(part.plannedMinutes)}</span>
-                          ) : null}
-                          {part.plannedTests !== undefined ? (
-                            <span><Icon name="check" /> {testsDone.toLocaleString("fa-IR")} / {part.plannedTests.toLocaleString("fa-IR")} تست</span>
-                          ) : null}
-                        </div>
-
-                        <div className="part-progress" aria-label={`پیشرفت ${progress} درصد`}>
-                          <span style={{ width: `${progress}%` }} />
-                        </div>
-                      </div>
-
-                      <button className="start-button" type="button" disabled>
-                        {part.status === "COMPLETED" ? "تمام شد" : part.status === "IN_PROGRESS" ? "ادامه" : "شروع"}
-                      </button>
-                    </article>
+                    <div className={"card session " + (done ? "done" : "")} key={s(part.id, String(index))}>
+                      <div className={"subjectBox " + kind}><Icon name={title.includes("GMAT") ? "brain" : title.includes("مرور") ? "bookmark" : "list"}/></div>
+                      <div><div className="sessionTitle">{title}</div><div className="sessionMeta">{planned.toLocaleString("fa-IR")} تست · {mins.toLocaleString("fa-IR")} دقیقه</div>{!done ? <div className="chips"><span className="chip">{complete.toLocaleString("fa-IR")} / {planned.toLocaleString("fa-IR")} تست</span>{actual ? <span className="chip">{actual.toLocaleString("fa-IR")} دقیقه واقعی</span> : null}</div> : null}</div>
+                      <div className="sessionActions"><small>{done ? "انجام شد" : status === "IN_PROGRESS" ? "در حال انجام" : status === "PARTIAL" ? "نیمه‌تمام" : "آماده شروع"}</small>{!done ? <button className={"btn " + (status === "IN_PROGRESS" ? "jade" : "secondary")}>{status === "IN_PROGRESS" ? "ادامه" : "شروع"}</button> : null}</div>
+                    </div>
                   );
-                })
-              ) : (
-                <div className="empty-state">
-                  <div className="empty-icon"><Icon name="calendar" /></div>
-                  <h3>برای امروز هنوز برنامه‌ای ثبت نشده</h3>
-                  <p>بعد از ساخت صفحه برنامه‌ریز، بخش‌های روزانه از همین‌جا قابل شروع و ثبت خواهند بود.</p>
-                </div>
-              )}
+                }) : (
+                  <div className="card emptySessions"><div className="emptySessionIcon"><Icon name="calendar"/></div><b>برای امروز هنوز پارت مطالعه‌ای ثبت نشده</b><span>از «پارت جدید» برنامه امروزت را ثبت کن؛ بعد همین‌جا وارد اجرا می‌شوی.</span><button className="btn primary"><Icon name="plus"/>ساخت اولین پارت</button></div>
+                )}
+              </div>
             </div>
-          </section>
 
-          <aside className="right-column">
-            <section className="panel review-panel">
-              <div className="panel-head compact">
-                <div>
-                  <span className="eyebrow">مرور امروز</span>
-                  <h2>{dueReviews.toLocaleString("fa-IR")} مورد سررسید</h2>
-                </div>
-                <span className="review-mark"><Icon name="library" /></span>
-              </div>
-              <p>مرورهای بوکمارک‌شده و تست‌های نیازمند بازگشت، بدون تغییر خودکار برنامه اصلی.</p>
-              <button className="secondary-action" type="button" disabled>باز کردن صف مرور</button>
-            </section>
-
-            <section className="panel momentum-panel">
-              <span className="eyebrow">Momentum</span>
-              <h2>{streak ? "ریتمت را حفظ کن" : "ریتمت را از امروز بساز"}</h2>
-              <div className="week-dots" aria-label="هفته جاری">
-                {["ش","ی","د","س","چ","پ","ج"].map((day, index) => (
-                  <div key={day + index} className={index < Math.min(streak, 7) ? "done" : ""}>
-                    <span>{day}</span>
-                    <i>{index < Math.min(streak, 7) ? "✓" : ""}</i>
+            <aside className="rightRail">
+              <div className="card scoreRingCard">
+                <div className="scoreTop"><div><h3>Daily Score</h3><span>ترکیبی از اجرای پارت‌ها و تعداد تست</span></div><span className="pill">امروز</span></div>
+                <div className="ringWrap">
+                  <div className="ringHolder"><div className="ring" style={{background: "conic-gradient(var(--jade) 0 " + score + "%, #e9efec " + score + "% 100%)"}}/><div className="ringInner"><b className="mono">{score.toLocaleString("fa-IR")}٪</b><small>پیشرفت</small></div></div>
+                  <div className="metrics">
+                    <div className="metricLine"><div className="label"><span>تعداد تست</span><span className="mono">{completedTests.toLocaleString("fa-IR")} / {plannedTests.toLocaleString("fa-IR")}</span></div><div className="track"><i style={{width: testProgress + "%"}}/></div></div>
+                    <div className="metricLine"><div className="label"><span>پارت‌ها</span><span className="mono">{completedParts.toLocaleString("fa-IR")} / {partCount.toLocaleString("fa-IR")}</span></div><div className="track"><i style={{width: partProgress + "%"}}/></div></div>
+                    <div className="metricLine"><div className="label"><span>زمان</span><span className="mono">{actualMinutes.toLocaleString("fa-IR")} / {plannedMinutes.toLocaleString("fa-IR")} دقیقه</span></div><div className="track blue"><i style={{width: timeProgress + "%"}}/></div></div>
                   </div>
-                ))}
+                </div>
               </div>
-            </section>
 
-            <section className="quote-card">
-              <span>اصل امروز</span>
-              <strong>کیفیت اجرا مهم‌تر از شلوغ بودن برنامه است.</strong>
-              <p>رَه فقط واقعیت مطالعه را ثبت می‌کند؛ تصمیم برنامه همیشه دست توست.</p>
-            </section>
-          </aside>
-        </div>
+              <div className="card cardPad reviewSummary"><div className="cardHeader"><h3>مرورهای آماده</h3><span>کارت خلاصه</span></div><div className="reviewItem"><div><b>{dueReviews.toLocaleString("fa-IR")} تست آماده مرور</b><small>{overdueReviews ? overdueReviews.toLocaleString("fa-IR") + " مورد عقب‌افتاده" : "مورد عقب‌افتاده نداری"}</small></div><button className="btn ghost">باز کردن</button></div></div>
+
+              <div className="miniNotice"><b>🔥 {streak.toLocaleString("fa-IR")} روز پیوسته</b><p>رَه روند واقعی مطالعه را نگه می‌دارد؛ اینجا قرار است پیشرفتت را ببینی، نه فقط برنامه‌ای که نوشته‌ای.</p></div>
+            </aside>
+          </div>
+        </section>
       </main>
 
-      <nav className="mobile-nav" aria-label="ناوبری موبایل">
-        <a className="mobile-nav-item active" href="/"><Icon name="check" /><span>امروز</span></a>
-        <button className="mobile-nav-item" type="button" disabled><Icon name="calendar" /><span>برنامه</span></button>
-        <button className="mobile-plus" type="button" disabled aria-label="ثبت سریع"><Icon name="plus" /></button>
-        <button className="mobile-nav-item" type="button" disabled><Icon name="library" /><span>کتابخانه</span></button>
-        <button className="mobile-nav-item" type="button" disabled><Icon name="chart" /><span>بینش</span></button>
-      </nav>
+      <nav className="bottomNav"><a className="active" href="/"><Icon name="sun"/><span>امروز</span></a><button><Icon name="calendar"/><span>برنامه</span></button><button className="quickAdd"><Icon name="plus"/></button><button><Icon name="book"/><span>کتابخانه</span></button><button><Icon name="chart"/><span>گزارش</span></button></nav>
     </div>
   );
 }
